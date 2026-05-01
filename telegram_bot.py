@@ -158,7 +158,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     init_db()
     update_user_activity(update.effective_user.id)
     await update.message.reply_text(
-        "🤖 *Привет! Я бот на базе Bothub API.*\n\n"
+        "🤖 *Привет! Я бот для генерации текста, изображений и видес м помощью искуственного интеллекта Дмитрия Урецкого.*\n\n"
         "✏️ Текст – бесплатно, без лимита\n"
         "🖼 Изображения – 5 бесплатных в неделю, далее платно\n"
         "🎬 Видео – платно (промты)\n"
