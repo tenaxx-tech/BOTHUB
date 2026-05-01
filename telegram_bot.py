@@ -810,13 +810,14 @@ async def main_async():
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    entry_points=[CommandHandler("start", start)],
-    states={
-        MAIN_MENU: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu),
-            CallbackQueryHandler(robokassa_topup_callback, pattern="robokassa_topup"),
-            CallbackQueryHandler(robokassa_amount_callback, pattern="^robokassa_\\d+$"),
-        ],
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            MAIN_MENU: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu),
+                CallbackQueryHandler(robokassa_topup_callback, pattern="robokassa_topup"),
+                CallbackQueryHandler(robokassa_amount_callback, pattern="^robokassa_\\d+$"),
+            ],
             TEXT_GEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_model_selection)],
             IMAGE_GEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_model_selection)],
             VIDEO_GEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_model_selection)],
@@ -832,7 +833,10 @@ async def main_async():
             AWAIT_PROMPT_FOR_ANIMATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_animate_photo_prompt)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False,
+        allow_reentry=True,
     )
+
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("clear", clear_dialog))
     app.add_handler(CommandHandler("add_balance", add_balance_command))
