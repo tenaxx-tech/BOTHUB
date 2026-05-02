@@ -1,4 +1,5 @@
 import aiohttp
+import base64
 from config import BOTHUB_API_KEY
 
 BOTHUB_BASE_URL = "https://openai.bothub.chat/v1"
@@ -57,13 +58,24 @@ async def bothub_image_generate(prompt: str, model: str) -> tuple[bytes, str]:
             images = data.get("choices", [{}])[0].get("message", {}).get("images", [])
             if not images:
                 raise Exception("No images in response")
-            image_url = images[0].get("image_url", {}).get("url")
-            if not image_url:
-                raise Exception("No image URL")
-            async with session.get(image_url) as img_resp:
-                if img_resp.status != 200:
-                    raise Exception("Failed to download image")
-                return await img_resp.read(), image_url
+            image_data = images[0].get("image_url", {}).get("url")
+            if not image_data:
+                raise Exception("No image URL or data in response")
+
+            # Обработка data URL (base64)
+            if image_data.startswith("data:image/"):
+                if ";base64," in image_data:
+                    _, base64_part = image_data.split(",", 1)
+                    image_bytes = base64.b64decode(base64_part)
+                    return image_bytes, ""
+                else:
+                    raise Exception("Unsupported data URL format (no base64 marker)")
+            else:
+                # Обычный HTTP URL
+                async with session.get(image_data) as img_resp:
+                    if img_resp.status != 200:
+                        raise Exception(f"Failed to download image, status {img_resp.status}")
+                    return await img_resp.read(), image_data
 
 async def bothub_video_generate(prompt: str, model: str) -> tuple[bytes, str]:
     raise NotImplementedError("Video generation via Bothub not implemented yet")
