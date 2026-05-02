@@ -4,6 +4,7 @@ import asyncio
 from config import BOTHUB_API_KEY
 
 BOTHUB_BASE_URL = "https://openai.bothub.chat/v1"
+BOTHUB_REPLICATE_URL = "https://bothub.chat/api/v2/replicate/v1"
 
 async def bothub_chat_completion(messages: list, model: str, max_tokens: int = 2048, temperature: float = 1.0, retries: int = 3) -> str:
     url = f"{BOTHUB_BASE_URL}/chat/completions"
@@ -34,7 +35,7 @@ async def bothub_chat_completion(messages: list, model: str, max_tokens: int = 2
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
             if attempt == retries - 1:
                 raise Exception(f"Bothub API недоступен после {retries} попыток: {str(e)}")
-            await asyncio.sleep(2 ** attempt)  # экспоненциальная задержка
+            await asyncio.sleep(2 ** attempt)
 
 async def bothub_text_generate(prompt: str, history: list, model: str, file_text: str = None) -> str:
     if file_text:
@@ -83,6 +84,40 @@ async def bothub_image_generate(prompt: str, model: str) -> tuple[bytes, str]:
                         raise Exception(f"Failed to download image, status {img_resp.status}")
                     return await img_resp.read(), image_data
 
+async def bothub_face_swap(target_url: str, source_url: str, model: str) -> tuple[bytes, str]:
+    """
+    Замена лица через Bothub Replicate API.
+    model: "codeplugtech-face-swap" или "cdlingram-face-swap"
+    """
+    url = f"{BOTHUB_REPLICATE_URL}/images/generations"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {BOTHUB_API_KEY}"
+    }
+    payload = {
+        "model": model,
+        "input": {
+            "inputImage": target_url,
+            "swapImage": source_url
+        },
+        "bothub": {"include_usage": True}
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise Exception(f"Replicate API error {resp.status}: {error_text}")
+            data = await resp.json()
+            urls = data.get("urls", [])
+            if not urls:
+                raise Exception("No image URLs in response")
+            media_url = urls[0]
+            async with session.get(media_url) as img_resp:
+                if img_resp.status != 200:
+                    raise Exception(f"Failed to download image, status {img_resp.status}")
+                return await img_resp.read(), media_url
+
+# Заглушки для остальных функций
 async def bothub_video_generate(prompt: str, model: str) -> tuple[bytes, str]:
     raise NotImplementedError("Video generation via Bothub not implemented yet")
 
