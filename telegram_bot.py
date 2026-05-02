@@ -19,14 +19,7 @@ from database import (
     get_user_balance, add_balance, deduct_balance,
     get_weekly_image_count, increment_weekly_image_count
 )
-from bothub_client import (
-    bothub_text_generate,
-    bothub_text_generate_with_files,
-    bothub_image_generate,
-    bothub_video_generate,
-    bothub_animate_photo,
-    bothub_image_edit
-)
+from bothub_client import bothub_text_generate, bothub_image_generate
 from robokassa import get_payment_url, check_result_signature, check_success_signature
 from database import create_robokassa_order, update_robokassa_order_status, get_robokassa_order
 
@@ -266,7 +259,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "🤖 *Привет! Я бот для генерации текста, изображений и видео через Bothub API.*\n\n"
         "✏️ Текст – сотни моделей (GPT-5, Claude, Gemini, DeepSeek, Grok, Qwen)\n"
-        "🖼 Изображения – DALL-E 3, GPT-5 Image, Gemini Flash Image (5 бесплатных в неделю, далее платно)\n"
+        "🖼 Изображения – DALL‑E 3, GPT‑5 Image, Gemini Flash Image (5 бесплатных в неделю, далее платно)\n"
         "🎬 Видео – платно (промты)\n\n"
         "📎 *Поддержка файлов:* отправьте txt, pdf, docx для контекста (особенно DeepSeek).\n\n"
         "Выберите действие:",
@@ -465,11 +458,6 @@ async def start_dialog_with_files(update: Update, context: ContextTypes.DEFAULT_
     save_message(user_id, "user", user_message)
 
     attached_text = context.user_data.pop('attached_files_text', '')
-    if attached_text:
-        full_prompt = f"Содержимое приложенного файла:\n{attached_text}\n\nВопрос пользователя:\n{user_message}"
-    else:
-        full_prompt = user_message
-
     history = get_history(user_id, limit=10)
 
     if price > 0 and get_user_balance(user_id) < price:
@@ -482,7 +470,7 @@ async def start_dialog_with_files(update: Update, context: ContextTypes.DEFAULT_
     stop = asyncio.Event()
     task = asyncio.create_task(send_action_loop(update, ChatAction.TYPING, stop))
     try:
-        answer = await bothub_text_generate(full_prompt, history, model)
+        answer = await bothub_text_generate(user_message, history, model, attached_text)
     except Exception as e:
         logger.exception("Текстовая ошибка")
         await update.message.reply_text(f"❌ Ошибка: {str(e)[:200]}")
@@ -668,7 +656,6 @@ async def handle_popular_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Введите описание изображения:", reply_markup=get_cancel_keyboard())
         return AWAIT_PROMPT_FOR_IMAGE
     elif text == "✏️ 5. Изменить изображение по описанию":
-        # Для редактирования потребуется отдельная модель, укажем временно недоступно
         await update.message.reply_text("❌ Редактирование изображений через Bothub пока не реализовано. Используйте раздел 'Генерация изображения'.", reply_markup=get_popular_menu_keyboard())
         return POPULAR_MENU
     else:
@@ -772,7 +759,7 @@ async def handle_text_to_image(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text("Что дальше?", reply_markup=get_popular_menu_keyboard())
     return POPULAR_MENU
 
-# Заглушки для анимации и редактирования (можно доработать)
+# Заглушки для анимации и редактирования
 async def handle_animate_photo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Анимация фото через Bothub требует отдельной настройки. Пока недоступно.", reply_markup=get_popular_menu_keyboard())
     return POPULAR_MENU
@@ -790,7 +777,7 @@ async def handle_edit_image(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def handle_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return POPULAR_MENU
 
-# ----- Платежи и веб-сервер (Robokassa + Stars) -----
+# ------------------- Платежи и веб-сервер -------------------
 async def robokassa_topup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
