@@ -257,11 +257,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     init_db()
     update_user_activity(update.effective_user.id)
     await update.message.reply_text(
-        "🤖 *Привет! Я бот для генерации текста, изображений и видео через Bothub API.*\n\n"
+        "🤖 *Привет! Я бот-помощник Дмитрия Урецкого для генерации текста, изображений и видео с помощью ИИ.*\n\n"
         "✏️ Текст – сотни моделей (GPT-5, Claude, Gemini, DeepSeek, Grok, Qwen)\n"
         "🖼 Изображения – DALL‑E 3, GPT‑5 Image, Gemini Flash Image (5 бесплатных в неделю, далее платно)\n"
         "🎬 Видео – платно (промты)\n\n"
-        "📎 *Поддержка файлов:* отправьте txt, pdf, docx для контекста (особенно DeepSeek).\n\n"
+        "📎 *Поддержка файлов:* отправьте txt, pdf, docx для обучения ботов (преимущественно DeepSeek).\n\n"
         "Выберите действие:",
         reply_markup=get_main_keyboard(),
         parse_mode="Markdown"
