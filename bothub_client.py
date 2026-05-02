@@ -1,106 +1,82 @@
 import aiohttp
-import logging
+import asyncio
 from typing import List, Tuple, Optional
+from config import BOTHUB_API_KEY
 
-from openai import AsyncOpenAI
+BOTHUB_BASE_URL = "https://openai.bothub.chat/v1"
 
-from config import BOTHUB_API_KEY, BOTHUB_OPENAI_BASE_URL, BOTHUB_REPLICATE_BASE_URL
-
-logger = logging.getLogger(__name__)
-
-# ------------------- OpenAI-совместимый клиент для текста -------------------
-openai_client = AsyncOpenAI(
-    api_key=BOTHUB_API_KEY,
-    base_url=BOTHUB_OPENAI_BASE_URL,
-)
-
-async def bothub_text_generate(prompt: str, history: List[Tuple[str, str]], model: str) -> str:
-    """Генерация текста через OpenAI-совместимый API Bothub."""
-    messages = []
-    for role, content in history[-5:]:
-        messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": prompt})
-
-    try:
-        response = await openai_client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=1024,
-            temperature=1.0,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.exception(f"Bothub text error: {e}")
-        raise Exception(f"Ошибка генерации текста: {str(e)}")
-
-# ------------------- Replicate API через Bothub (универсальная функция) -------------------
-async def bothub_media_generate(model: str, input_payload: dict) -> tuple[bytes, str]:
-    """
-    Отправляет запрос к Replicate API Bothub и возвращает (file_bytes, media_url).
-    input_payload – параметры для конкретной модели (prompt, image, aspect_ratio и т.д.)
-    """
-    url = f"{BOTHUB_REPLICATE_BASE_URL}/images/generations"
+async def bothub_chat_completion(messages: List[dict], model: str, max_tokens: int = 2048, temperature: float = 1.0) -> str:
+    url = f"{BOTHUB_BASE_URL}/chat/completions"
     headers = {
-        "Authorization": f"Bearer {BOTHUB_API_KEY}",
         "Content-Type": "application/json",
+        "Authorization": f"Bearer {BOTHUB_API_KEY}"
     }
     payload = {
         "model": model,
-        "input": input_payload
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "bothub": {"include_usage": True}
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise Exception(f"Bothub API error {resp.status}: {error_text}")
+            data = await resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content")
+            if not content:
+                content = data.get("result") or data.get("output")
+            return content or ""
+
+async def bothub_text_generate(prompt: str, history: List[Tuple[str, str]], model: str) -> str:
+    messages = []
+    for role, content in history[-10:]:
+        messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": prompt})
+    return await bothub_chat_completion(messages, model)
+
+async def bothub_text_generate_with_files(prompt: str, history: List[Tuple[str, str]], model: str, file_text: Optional[str] = None) -> str:
+    if file_text:
+        full_prompt = f"Содержимое приложенного файла:\n{file_text}\n\nЗапрос пользователя:\n{prompt}"
+    else:
+        full_prompt = prompt
+    return await bothub_text_generate(full_prompt, history, model)
+
+async def bothub_image_generate(prompt: str, model: str) -> tuple[bytes, str]:
+    """Генерация изображения через Bothub (через /chat/completions для gpt-5-image и аналогичных)"""
+    url = f"{BOTHUB_BASE_URL}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {BOTHUB_API_KEY}"
+    }
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "bothub": {"include_usage": True}
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, headers=headers) as resp:
             if resp.status != 200:
-                text = await resp.text()
-                raise Exception(f"Bothub Replicate error {resp.status}: {text}")
+                raise Exception(f"Image error: {await resp.text()}")
             data = await resp.json()
-            urls = data.get("urls")
-            if not urls or not isinstance(urls, list):
-                raise Exception(f"Неверный ответ Bothub: {data}")
-            media_url = urls[0]
-            async with session.get(media_url) as img_resp:
+            images = data.get("choices", [{}])[0].get("message", {}).get("images", [])
+            if not images:
+                raise Exception("No images in response")
+            image_url = images[0].get("image_url", {}).get("url")
+            if not image_url:
+                raise Exception("No image URL")
+            async with session.get(image_url) as img_resp:
                 if img_resp.status != 200:
-                    raise Exception(f"Ошибка скачивания файла: {img_resp.status}")
-                file_bytes = await img_resp.read()
-            return file_bytes, media_url
+                    raise Exception("Failed to download image")
+                return await img_resp.read(), image_url
 
-# ------------------- Специализированные обёртки -------------------
-async def bothub_image_generate(prompt: str, model: str, aspect_ratio: str = "1:1") -> tuple[bytes, str]:
-    """Генерация изображения из текста."""
-    payload = {"prompt": prompt, "aspect_ratio": aspect_ratio, "num_outputs": 1}
-    return await bothub_media_generate(model, payload)
+async def bothub_video_generate(prompt: str, model: str) -> tuple[bytes, str]:
+    """Bothub не поддерживает видео через OpenAI-совместимый endpoint, поэтому заглушка."""
+    raise NotImplementedError("Video generation via Bothub not implemented yet")
+
+async def bothub_animate_photo(image_url: str, mode: str, prompt: Optional[str]) -> tuple[bytes, str]:
+    raise NotImplementedError("Animation via Bothub not implemented")
 
 async def bothub_image_edit(image_url: str, prompt: str, model: str) -> tuple[bytes, str]:
-    """Редактирование изображения по описанию (модель должна поддерживать image+prompt)."""
-    payload = {"image": image_url, "prompt": prompt}
-    return await bothub_media_generate(model, payload)
-
-async def bothub_video_generate(prompt: str, model: str, image_url: Optional[str] = None) -> tuple[bytes, str]:
-    """Генерация видео (текст или изображение+текст)."""
-    payload = {"prompt": prompt}
-    if image_url:
-        payload["imageUrl"] = image_url
-    return await bothub_media_generate(model, payload)
-
-async def bothub_animate_photo(image_url: str, mode: str, prompt: Optional[str] = None) -> tuple[bytes, str]:
-    """Оживление фото через grok-imagine-image-to-video."""
-    payload = {"imageUrl": image_url, "mode": mode}
-    if prompt:
-        payload["prompt"] = prompt
-    return await bothub_media_generate("grok-imagine-image-to-video", payload)
-
-# ------------------- Заглушки для неподдерживаемых функций -------------------
-async def bothub_remove_background(image_url: str) -> tuple[bytes, str]:
-    raise NotImplementedError("Удаление фона недоступно в Bothub. Используйте генерацию нового изображения.")
-
-async def bothub_upscale(image_url: str) -> tuple[bytes, str]:
-    raise NotImplementedError("Улучшение качества недоступно в Bothub.")
-
-async def bothub_face_swap(target_url: str, source_url: str) -> tuple[bytes, str]:
-    raise NotImplementedError("Замена лица недоступна в Bothub.")
-
-async def bothub_avatar(image_url: str, audio_url: str) -> tuple[bytes, str]:
-    raise NotImplementedError("Генерация аватара недоступна в Bothub.")
-
-async def bothub_audio_generate(text: str, model: str) -> tuple[bytes, str]:
-    raise NotImplementedError("Генерация аудио недоступна в Bothub.")
+    raise NotImplementedError("Image edit via Bothub not implemented")
