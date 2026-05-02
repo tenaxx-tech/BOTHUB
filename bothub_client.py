@@ -1,11 +1,9 @@
 import aiohttp
-import asyncio
-from typing import List, Tuple, Optional
 from config import BOTHUB_API_KEY
 
 BOTHUB_BASE_URL = "https://openai.bothub.chat/v1"
 
-async def bothub_chat_completion(messages: List[dict], model: str, max_tokens: int = 2048, temperature: float = 1.0) -> str:
+async def bothub_chat_completion(messages: list, model: str, max_tokens: int = 2048, temperature: float = 1.0) -> str:
     url = f"{BOTHUB_BASE_URL}/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -22,29 +20,25 @@ async def bothub_chat_completion(messages: List[dict], model: str, max_tokens: i
         async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=120)) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
-                raise Exception(f"Bothub API error {resp.status}: {error_text}")
+                raise Exception(f"Bothub error {resp.status}: {error_text}")
             data = await resp.json()
             content = data.get("choices", [{}])[0].get("message", {}).get("content")
             if not content:
                 content = data.get("result") or data.get("output")
             return content or ""
 
-async def bothub_text_generate(prompt: str, history: List[Tuple[str, str]], model: str) -> str:
-    messages = []
-    for role, content in history[-10:]:
-        messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": prompt})
-    return await bothub_chat_completion(messages, model)
-
-async def bothub_text_generate_with_files(prompt: str, history: List[Tuple[str, str]], model: str, file_text: Optional[str] = None) -> str:
+async def bothub_text_generate(prompt: str, history: list, model: str, file_text: str = None) -> str:
     if file_text:
         full_prompt = f"Содержимое приложенного файла:\n{file_text}\n\nЗапрос пользователя:\n{prompt}"
     else:
         full_prompt = prompt
-    return await bothub_text_generate(full_prompt, history, model)
+    messages = []
+    for role, content in history[-10:]:
+        messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": full_prompt})
+    return await bothub_chat_completion(messages, model)
 
 async def bothub_image_generate(prompt: str, model: str) -> tuple[bytes, str]:
-    """Генерация изображения через Bothub (через /chat/completions для gpt-5-image и аналогичных)"""
     url = f"{BOTHUB_BASE_URL}/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -72,10 +66,9 @@ async def bothub_image_generate(prompt: str, model: str) -> tuple[bytes, str]:
                 return await img_resp.read(), image_url
 
 async def bothub_video_generate(prompt: str, model: str) -> tuple[bytes, str]:
-    """Bothub не поддерживает видео через OpenAI-совместимый endpoint, поэтому заглушка."""
     raise NotImplementedError("Video generation via Bothub not implemented yet")
 
-async def bothub_animate_photo(image_url: str, mode: str, prompt: Optional[str]) -> tuple[bytes, str]:
+async def bothub_animate_photo(image_url: str, mode: str, prompt: str = None) -> tuple[bytes, str]:
     raise NotImplementedError("Animation via Bothub not implemented")
 
 async def bothub_image_edit(image_url: str, prompt: str, model: str) -> tuple[bytes, str]:
