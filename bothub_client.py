@@ -49,7 +49,7 @@ async def bothub_text_generate(prompt: str, history: list, model: str, file_text
     messages.append({"role": "user", "content": full_prompt})
     return await bothub_chat_completion(messages, model)
 
-# ----- Генерация изображений (Bothub Chat, модели gpt-5-image, gemini-2.5-flash-image) -----
+# ----- Генерация изображений (Bothub Chat) -----
 async def bothub_image_generate(prompt: str, model: str) -> tuple[bytes, str]:
     url = f"{BOTHUB_BASE_URL}/chat/completions"
     headers = {
@@ -85,7 +85,7 @@ async def bothub_image_generate(prompt: str, model: str) -> tuple[bytes, str]:
                         raise Exception(f"Failed to download image, status {img_resp.status}")
                     return await img_resp.read(), image_data
 
-# ----- Редактирование изображения по описанию (image + text -> image) через Bothub Chat (gemini-2.5-flash-image) -----
+# ----- Редактирование изображения по описанию (image + text -> image) -----
 async def bothub_image_edit(image_url: str, prompt: str, model: str) -> tuple[bytes, str]:
     url = f"{BOTHUB_BASE_URL}/chat/completions"
     headers = {
@@ -126,9 +126,9 @@ async def bothub_image_edit(image_url: str, prompt: str, model: str) -> tuple[by
                     raise Exception(f"Failed to download edited image, status {img_resp.status}")
                 return await img_resp.read(), image_data
 
-# ----- Replicate API Bothub (универсальный) -----
-async def bothub_replicate_generate(model: str, input_params: dict, endpoint: str = "images/generations") -> tuple[bytes, str]:
-    url = f"{BOTHUB_REPLICATE_URL}/{endpoint}"
+# ----- Replicate API Bothub (единый эндпоинт для всего) -----
+async def bothub_replicate_generate(model: str, input_params: dict) -> tuple[bytes, str]:
+    url = f"{BOTHUB_REPLICATE_URL}/images/generations"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {BOTHUB_API_KEY}"
@@ -167,12 +167,12 @@ async def bothub_replicate_generate(model: str, input_params: dict, endpoint: st
 # ----- Замена лица (Replicate) -----
 async def bothub_face_swap(target_url: str, source_url: str, model: str) -> tuple[bytes, str]:
     input_params = {"inputImage": target_url, "swapImage": source_url}
-    return await bothub_replicate_generate(model, input_params, endpoint="images/generations")
+    return await bothub_replicate_generate(model, input_params)
 
 # ----- Анимация фото (image‑to‑video) -----
 async def bothub_animate_photo(image_url: str, mode: str = "normal", prompt: str = None) -> tuple[bytes, str]:
-    model = "kling-v3-motion-control"
+    model = "kling-v3-motion-control"  # можно заменить на "veo-3-fast"
     input_params = {"imageUrl": image_url, "mode": mode}
     if prompt:
         input_params["prompt"] = prompt
-    return await bothub_replicate_generate(model, input_params, endpoint="predictions")
+    return await bothub_replicate_generate(model, input_params)
