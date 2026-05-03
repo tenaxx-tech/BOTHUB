@@ -845,16 +845,46 @@ async def handle_popular_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         return AWAIT_PROMPT_FOR_DEEPSEEK
 
     elif text == "🔄 Замена лица":
-        keyboard = [
-            [KeyboardButton("CodePlugTech (быстрый)")],
-            [KeyboardButton("CDIngram (качественный)")],
-            [KeyboardButton("🔙 Главное меню")]
-        ]
+        # Устанавливаем новую модель замены лица
+        context.user_data['selected_model'] = "face_swap_target"
         await update.message.reply_text(
-            "Выберите модель для замены лица:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+            "🔹 Замена лица\n\n"
+            "1️⃣ Отправьте **целевое изображение** (куда вставить лицо)\n"
+            "2️⃣ Затем отправьте **изображение-источник лица**",
+            reply_markup=get_cancel_keyboard()
         )
-        context.user_data['pending_action'] = 'face_swap'
+        return AWAIT_FACE_SWAP_TARGET
+
+    elif text == "🎨 Текст → изображение (лучшее)":
+        context.user_data['selected_model'] = "gpt-5-image"
+        context.user_data['media_category'] = 'image'
+        await update.message.reply_text(
+            "Введите описание изображения (используется GPT‑5 Image):",
+            reply_markup=get_cancel_keyboard()
+        )
+        return AWAIT_PROMPT_FOR_DEEPSEEK
+
+    elif text == "✏️ Изменить изображение по описанию":
+        context.user_data['edit_mode'] = True
+        await update.message.reply_text(
+            "🔹 Редактирование изображения (Nano Banana Pro)\n\n"
+            "1️⃣ Отправьте **изображение**\n"
+            "2️⃣ Затем отправьте **текстовое описание** изменений",
+            reply_markup=get_cancel_keyboard()
+        )
+        return IMAGE_TO_IMAGE
+
+    elif text == "🖼️ Оживить фото":
+        await update.message.reply_text(
+            "Отправьте **фото**, которое хотите оживить (превратить в видео).\n\n"
+            "Модель: Kling v3 Motion Control (6 промтов).\n"
+            "После фото вы сможете добавить описание движения или пропустить.",
+            reply_markup=get_cancel_keyboard()
+        )
+        return AWAIT_IMAGE_FOR_ANIMATE
+
+    else:
+        await update.message.reply_text("Выберите пункт из меню.", reply_markup=get_popular_menu_keyboard())
         return POPULAR_MENU
 
     elif text in ("CodePlugTech (быстрый)", "CDIngram (качественный)"):
