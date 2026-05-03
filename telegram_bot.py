@@ -1,186 +1,6 @@
 import aiohttp
 import base64
 import asyncio
-from config import BOTHUB_API_KEY
-
-BOTHUB_BASE_URL = "https://openai.bothub.chat/v1"
-BOTHUB_REPLICATE_URL = "https://bothub.chat/api/v2/replicate/v1"
-
-# ----- Текст (Chat completions) -----
-async def bothub_chat_completion(messages: list, model: str, max_tokens: int = 2048, temperature: float = 1.0, retries: int = 3) -> str:
-    url = f"{BOTHUB_BASE_URL}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {BOTHUB_API_KEY}"
-    }
-    payload = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "bothub": {"include_usage": True}
-    }
-    for attempt in range(retries):
-        try:
-            timeout = aiohttp.ClientTimeout(total=120, connect=30)
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers, timeout=timeout) as resp:
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        raise Exception(f"Bothub error {resp.status}: {error_text}")
-                    data = await resp.json()
-                    content = data.get("choices", [{}])[0].get("message", {}).get("content")
-                    if not content:
-                        content = data.get("result") or data.get("output")
-                    return content or ""
-        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-            if attempt == retries - 1:
-                raise Exception(f"API недоступен: {str(e)}")
-            await asyncio.sleep(2 ** attempt)
-
-async def bothub_text_generate(prompt: str, history: list, model: str, file_text: str = None) -> str:
-    if file_text:
-        full_prompt = f"Содержимое приложенного файла:\n{file_text}\n\nЗапрос пользователя:\n{prompt}"
-    else:
-        full_prompt = prompt
-    messages = []
-    for role, content in history[-10:]:
-        messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": full_prompt})
-    return await bothub_chat_completion(messages, model)
-
-# ----- Генерация изображений (Bothub Chat, модели gpt-5-image, gemini-2.5-flash-image) -----
-async def bothub_image_generate(prompt: str, model: str) -> tuple[bytes, str]:
-    url = f"{BOTHUB_BASE_URL}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {BOTHUB_API_KEY}"
-    }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "bothub": {"include_usage": True}
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers) as resp:
-            if resp.status != 200:
-                raise Exception(f"Image error: {await resp.text()}")
-            data = await resp.json()
-            images = data.get("choices", [{}])[0].get("message", {}).get("images", [])
-            if not images:
-                raise Exception("No images in response")
-            image_data = images[0].get("image_url", {}).get("url")
-            if not image_data:
-                raise Exception("No image URL or data")
-            if image_data.startswith("data:image/"):
-                if ";base64," in image_data:
-                    _, base64_part = image_data.split(",", 1)
-                    image_bytes = base64.b64decode(base64_part)
-                    return image_bytes, ""
-                else:
-                    raise Exception("Unsupported data URL")
-            else:
-                async with session.get(image_data) as img_resp:
-                    if img_resp.status != 200:
-                        raise Exception(f"Failed to download image, status {img_resp.status}")
-                    return await img_resp.read(), image_data
-
-# ----- Редактирование изображения по описанию (image + text -> image) через Bothub Chat (gemini-2.5-flash-image) -----
-async def bothub_image_edit(image_url: str, prompt: str, model: str) -> tuple[bytes, str]:
-    """
-    Отправляет изображение + текст, возвращает отредактированное изображение.
-    Использует мультимодальную модель (например, gemini-2.5-flash-image).
-    """
-    url = f"{BOTHUB_BASE_URL}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {BOTHUB_API_KEY}"
-    }
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}}
-                ]
-            }
-        ],
-        "bothub": {"include_usage": True}
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers) as resp:
-            if resp.status != 200:
-                raise Exception(f"Edit error: {await resp.text()}")
-            data = await resp.json()
-            images = data.get("choices", [{}])[0].get("message", {}).get("images", [])
-            if not images:
-                raise Exception("No images in response")
-            image_data = images[0].get("image_url", {}).get("url")
-            if not image_data:
-                raise Exception("No image URL")
-            if image_data.startswith("data:image/"):
-                if ";base64," in image_data:
-                    _, base64_part = image_data.split(",", 1)
-                    image_bytes = base64.b64decode(base64_part)
-                    return image_bytes, ""
-            async with session.get(image_data) as img_resp:
-                if img_resp.status != 200:
-                    raise Exception(f"Failed to download edited image, status {img_resp.status}")
-                return await img_resp.read(), image_data
-
-# ----- Replicate API Bothub (универсальный) -----
-async def bothub_replicate_generate(model: str, input_params: dict, endpoint: str = "images/generations") -> tuple[bytes, str]:
-    url = f"{BOTHUB_REPLICATE_URL}/{endpoint}"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {BOTHUB_API_KEY}"
-    }
-    payload = {
-        "model": model,
-        "input": input_params,
-        "bothub": {"include_usage": True}
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=180)) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                raise Exception(f"Replicate error {resp.status}: {error_text}")
-            data = await resp.json()
-            media_url = None
-            if "urls" in data and data["urls"]:
-                media_url = data["urls"][0]
-            elif "output" in data and isinstance(data["output"], str) and data["output"].startswith("http"):
-                media_url = data["output"]
-            elif "video_url" in data:
-                media_url = data["video_url"]
-            elif "output" in data and isinstance(data["output"], list) and data["output"]:
-                maybe_url = data["output"][0]
-                if isinstance(maybe_url, str) and maybe_url.startswith("http"):
-                    media_url = maybe_url
-                elif isinstance(maybe_url, dict) and "url" in maybe_url:
-                    media_url = maybe_url["url"]
-            if not media_url:
-                raise Exception("No media URL in response")
-            async with session.get(media_url) as media_resp:
-                if media_resp.status != 200:
-                    raise Exception(f"Failed to download media, status {media_resp.status}")
-                return await media_resp.read(), media_url
-
-# ----- Замена лица (Replicate) -----
-async def bothub_face_swap(target_url: str, source_url: str, model: str) -> tuple[bytes, str]:
-    input_params = {"inputImage": target_url, "swapImage": source_url}
-    return await bothub_replicate_generate(model, input_params, endpoint="images/generations")
-
-# ----- Анимация фото (image‑to‑video) -----
-async def bothub_animate_photo(image_url: str, mode: str = "normal", prompt: str = None) -> tuple[bytes, str]:
-    model = "kling-v3-motion-control"   # или veo-3-fast
-    input_params = {"imageUrl": image_url, "mode": mode}
-    if prompt:
-        input_params["prompt"] = prompt
-    return await bothub_replicate_generate(model, input_params, endpoint="predictions")
-    import asyncio
 import io
 import logging
 import os
@@ -221,26 +41,25 @@ ADMIN_IDS = [466829859]
 
 # ------------------- Состояния -------------------
 MAIN_MENU = 0
-TEXT_GEN = 1                       # обычный текст (диалог)
-TEXT_TO_IMAGE = 2                  # текст -> изображение
-IMAGE_TO_IMAGE = 3                 # изображение + текст -> изображение
-VIDEO_GEN = 4                      # видео (текст или изображение+текст)
+TEXT_GEN = 1
+TEXT_TO_IMAGE = 2
+IMAGE_TO_IMAGE = 3
+VIDEO_GEN = 4
 POPULAR_MENU = 5
-DIALOG = 6                         # диалог с текстовой моделью
-AWAIT_PROMPT = 7                   # ожидание текстового описания
-AWAIT_IMAGE_FOR_EDIT = 8           # ожидание изображения для редактирования
-AWAIT_PROMPT_FOR_EDIT = 9          # ожидание описания изменений
-AWAIT_IMAGE_FOR_ANIMATE = 10       # ожидание фото для анимации
-AWAIT_MODE_FOR_ANIMATE = 11        # выбор режима анимации
-AWAIT_PROMPT_FOR_ANIMATE = 12      # описание движения (опционально)
-AWAIT_PROMPT_FOR_DEEPSEEK = 13     # генератор промтов
+DIALOG = 6
+AWAIT_PROMPT = 7
+AWAIT_IMAGE_FOR_EDIT = 8
+AWAIT_PROMPT_FOR_EDIT = 9
+AWAIT_IMAGE_FOR_ANIMATE = 10
+AWAIT_MODE_FOR_ANIMATE = 11
+AWAIT_PROMPT_FOR_ANIMATE = 12
+AWAIT_PROMPT_FOR_DEEPSEEK = 13
 AWAIT_FACE_SWAP_TARGET = 14
 AWAIT_FACE_SWAP_SOURCE = 15
 AWAIT_FILE_FOR_CONTEXT = 16
-AWAIT_VIDEO_PROMPT = 17            # ожидание описания видео (текст или изображение+текст)
+AWAIT_VIDEO_PROMPT = 17
 
-# ------------------- Модели текста (бесплатные, безлимитные) -------------------
-# Все текстовые модели через Bothub Chat API, цена 0.
+# ------------------- Модели -------------------
 TEXT_MODELS = {
     "gpt-4o-mini":       "GPT-4o mini (быстрый, умный)",
     "gpt-5-mini":        "GPT-5 mini (компактный)",
@@ -251,26 +70,18 @@ TEXT_MODELS = {
     "qwen-turbo":        "Qwen Turbo (многоязычный)",
     "llama-4-maverick":  "Llama 4 Maverick (open‑source)",
 }
-# Цены для текста – 0, оставляем для совместимости
 TEXT_MODEL_PRICES = {m: 0 for m in TEXT_MODELS}
 
-# ------------------- Модели для генерации изображений (текст->изображение) -------------------
-# Используем Bothub Chat API (gpt-5-image, gemini-2.5-flash-image)
 TEXT_TO_IMAGE_MODELS = {
     "gpt-5-image":            "GPT-5 Image (высокое качество)",
     "gpt-5-image-mini":       "GPT-5 Image Mini (быстрый)",
     "gemini-2.5-flash-image": "Nano Banana Pro (отличное редактирование)",
 }
-# Цены (за 1M токенов, но для изображений считаем штучно через лимиты)
 TEXT_TO_IMAGE_PRICES = {m: 0 for m in TEXT_TO_IMAGE_MODELS}
 
-# ------------------- Модели для редактирования (изображение+текст->изображение) -------------------
-# Используем gemini-2.5-flash-image (она же Nano Banana Pro) – мультимодальная
 IMAGE_TO_IMAGE_MODEL = "gemini-2.5-flash-image"
 IMAGE_TO_IMAGE_PRICE = 0
 
-# ------------------- Модели видео (текст->видео, изображение+текст->видео) -------------------
-# Используем Replicate через Bothub
 VIDEO_MODELS = {
     "kling-v3-motion-control": "Kling v3 Motion Control (качественное, 6 промтов)",
     "veo-3-fast":              "Veo 3 Fast (быстрое, 1 промт)",
@@ -282,7 +93,6 @@ VIDEO_MODEL_PRICES = {
     "sora-2": 3,
 }
 
-# ------------------- Модели популярного меню -------------------
 POPULAR_ACTIONS = {
     "prompt_image": "Генератор промтов для изображений",
     "prompt_video": "Генератор промтов для видео",
@@ -341,9 +151,7 @@ def get_text_to_image_models_keyboard():
 def get_video_models_keyboard():
     keyboard = []
     for model_id, desc in VIDEO_MODELS.items():
-        price = VIDEO_MODEL_PRICES.get(model_id, 0)
-        btn_text = f"{desc}"
-        keyboard.append([KeyboardButton(btn_text)])
+        keyboard.append([KeyboardButton(f"{desc}")])
     keyboard.append([KeyboardButton("🔙 Главное меню")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
@@ -601,7 +409,6 @@ async def start_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE, user_
     save_message(user_id, "user", user_message)
     attached_text = context.user_data.pop('attached_files_text', '')
     history = get_history(user_id, limit=10)
-    # текст всегда бесплатный, но проверка на всякий случай
     if price > 0 and get_user_balance(user_id) < price:
         await update.message.reply_text(f"❌ Недостаточно промтов. Нужно: {price}.", reply_markup=get_main_keyboard())
         return MAIN_MENU
@@ -639,7 +446,6 @@ async def handle_text_to_image_prompt(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text("Главное меню:", reply_markup=get_main_keyboard())
         return MAIN_MENU
     model = context.user_data.get('selected_model')
-    price = context.user_data.get('model_price', 0)
     used = get_weekly_image_count(user_id)
     paid = False
     if used >= 5:
@@ -681,7 +487,7 @@ async def handle_text_to_image_prompt(update: Update, context: ContextTypes.DEFA
     await update.message.reply_text("Что дальше?", reply_markup=get_main_keyboard())
     return MAIN_MENU
 
-# ----- Редактирование изображения по описанию (изображение + текст) -----
+# ----- Редактирование изображения по описанию -----
 async def handle_edit_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.text:
         if update.message.text == "🔙 Главное меню":
@@ -752,10 +558,8 @@ async def handle_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("Что дальше?", reply_markup=get_main_keyboard())
     return MAIN_MENU
 
-# ----- Генерация видео (текст или изображение+текст) -----
+# ----- Генерация видео -----
 async def handle_video_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Этот обработчик вызывается когда пользователь отправляет текст (после выбора модели)
-    # Если до этого было отправлено фото – оно лежит в context.user_data['video_image_url']
     user_id = update.effective_user.id
     prompt = update.message.text
     if prompt == "🔙 Главное меню":
@@ -764,7 +568,7 @@ async def handle_video_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
         return MAIN_MENU
     model = context.user_data.get('selected_model')
     price = context.user_data.get('model_price', 0)
-    image_url = context.user_data.get('video_image_url')  # если есть фото
+    image_url = context.user_data.get('video_image_url')
     if price > 0 and get_user_balance(user_id) < price:
         await update.message.reply_text(f"❌ Недостаточно промтов. Нужно: {price}.", reply_markup=get_main_keyboard())
         return MAIN_MENU
@@ -775,12 +579,12 @@ async def handle_video_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
     task = asyncio.create_task(send_action_loop(update, ChatAction.UPLOAD_VIDEO, stop))
     try:
         if image_url:
-            # image+text -> video
             input_params = {"imageUrl": image_url, "prompt": prompt}
             result_bytes, media_url = await bothub_replicate_generate(model, input_params, endpoint="predictions")
         else:
-            # text -> video
-            input_params = {"prompt": prompt, "duration": 5}
+            input_params = {"prompt": prompt}
+            if model == "veo-3-fast":
+                input_params["duration"] = 5
             result_bytes, media_url = await bothub_replicate_generate(model, input_params, endpoint="predictions")
     except Exception as e:
         logger.exception("Ошибка генерации видео")
@@ -803,7 +607,6 @@ async def handle_video_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("Что дальше?", reply_markup=get_main_keyboard())
     return MAIN_MENU
 
-# Для поддержки image‑to‑video: если пользователь отправляет фото в состоянии VIDEO_GEN
 async def handle_video_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.text:
         if update.message.text == "🔙 Главное меню":
@@ -811,7 +614,6 @@ async def handle_video_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text("Главное меню:", reply_markup=get_main_keyboard())
             return MAIN_MENU
         else:
-            # Пользователь отправил текст без фото – обрабатываем как обычный промпт
             return await handle_video_prompt(update, context)
     if update.message.photo:
         photo_file = await update.message.photo[-1].get_file()
@@ -845,7 +647,6 @@ async def handle_popular_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         return AWAIT_PROMPT_FOR_DEEPSEEK
 
     elif text == "🔄 Замена лица":
-        # Устанавливаем новую модель замены лица
         context.user_data['selected_model'] = "face_swap_target"
         await update.message.reply_text(
             "🔹 Замена лица\n\n"
@@ -887,6 +688,49 @@ async def handle_popular_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Выберите пункт из меню.", reply_markup=get_popular_menu_keyboard())
         return POPULAR_MENU
 
+# ----- ДОБАВЛЕНА ФУНКЦИЯ ДЛЯ ГЕНЕРАТОРА ПРОМТОВ -----
+async def handle_deepseek_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_input = update.message.text
+    if user_input == "🔙 Главное меню":
+        context.user_data.clear()
+        await update.message.reply_text("Главное меню:", reply_markup=get_main_keyboard())
+        return MAIN_MENU
+    action = context.user_data.get('pending_action')
+    if action == 'prompt_image':
+        system_prompt = (
+            "Ты — эксперт по созданию промтов для генерации изображений. "
+            "Преврати краткое описание пользователя в подробный, качественный промт на русском языке. "
+            "Добавь детали: стиль, освещение, композицию, цветовую гамму. "
+            "Промт должен быть на русском, 50-200 слов. Только промт, без лишних слов."
+        )
+        user_prompt = f"Создай промт для изображения по запросу: {user_input}"
+    elif action == 'prompt_video':
+        system_prompt = (
+            "Ты — эксперт по созданию промтов для генерации видео. "
+            "Преврати краткое описание в подробный промт на русском. "
+            "Укажи движение камеры, действия, освещение. "
+            "Промт на русском, 50-200 слов. Только промт."
+        )
+        user_prompt = f"Создай промт для видео по запросу: {user_input}"
+    else:
+        await update.message.reply_text("Ошибка.", reply_markup=get_main_keyboard())
+        return MAIN_MENU
+    history = [("system", system_prompt)]
+    stop = asyncio.Event()
+    task = asyncio.create_task(send_action_loop(update, ChatAction.TYPING, stop))
+    try:
+        answer = await bothub_text_generate(user_prompt, history, "deepseek-chat")
+    finally:
+        stop.set()
+        await task
+    if answer:
+        await update.message.reply_text(f"✨ **Сгенерированный промт:**\n\n{answer}", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("❌ Ошибка генерации.")
+    await update.message.reply_text("Продолжайте:", reply_markup=get_popular_menu_keyboard())
+    context.user_data.pop('pending_action', None)
+    return POPULAR_MENU
+
 async def handle_face_swap_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.text and update.message.text == "🔙 Главное меню":
         context.user_data.clear()
@@ -915,7 +759,7 @@ async def handle_face_swap_source(update: Update, context: ContextTypes.DEFAULT_
     if not target_url:
         await update.message.reply_text("Ошибка: нет целевого фото. Начните заново.", reply_markup=get_main_keyboard())
         return MAIN_MENU
-    model = context.user_data.get('selected_model', 'codeplugtech-face-swap')
+    model = context.user_data.get('selected_model', 'face_swap_target')
     user_id = update.effective_user.id
     used = get_weekly_image_count(user_id)
     paid = False
@@ -990,7 +834,7 @@ async def handle_animate_photo_prompt(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text("Ошибка: не найдено фото.", reply_markup=get_main_keyboard())
         return MAIN_MENU
     prompt = None if text.lower() == "пропустить" else text
-    price = 6  # Kling v3 Motion Control
+    price = 6
     if get_user_balance(user_id) < price:
         await update.message.reply_text(f"❌ Недостаточно промтов. Нужно: {price}.", reply_markup=get_main_keyboard())
         return MAIN_MENU
@@ -1020,7 +864,7 @@ async def handle_animate_photo_prompt(update: Update, context: ContextTypes.DEFA
     await update.message.reply_text("Что дальше?", reply_markup=get_popular_menu_keyboard())
     return POPULAR_MENU
 
-# ----- Платежи и веб-сервер (Robokassa, Stars) -----
+# ----- Платежи и веб-сервер -----
 async def robokassa_topup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1128,9 +972,7 @@ async def main_async():
             ],
             TEXT_GEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_model_selection)],
             TEXT_TO_IMAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_to_image_model_selection)],
-            VIDEO_GEN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_video_model_selection),
-            ],
+            VIDEO_GEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_video_model_selection)],
             IMAGE_TO_IMAGE: [
                 MessageHandler(filters.PHOTO, handle_edit_image),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_image),
